@@ -14,11 +14,18 @@ from bleak.backends.client import BaseBleakClient
 from bleak.exc import BleakError
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 
+try:
+    from bleak_retry_connector import clear_cache
+except ImportError:  # very old bleak-retry-connector: skip cache clearing
+    clear_cache = None
+
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
 
 from .const import (
     AUTH_TIMEOUT,
@@ -28,6 +35,7 @@ from .const import (
     SILENCE_TIMEOUT,
     STARTUP_TIMEOUT,
 )
+from .models import seconds_to_next_minute
 from .protocol import WRITE_CHAR_UUID, parse_token
 from .session import InvalidAuth, SessionClosed, SignatureError, SignatureSession
 
@@ -66,11 +74,18 @@ async def async_connect(
     except (BleakError, TimeoutError, OSError) as err:
         raise CannotConnect(str(err)) from err
 
-    write_with_response = True
+    # A service list cached while the adapter was misbehaving can be incomplete. If the
+    # Chandler characteristics are missing, drop the cache so the next attempt rediscovers.
+    char = None
     with contextlib.suppress(Exception):
         char = client.services.get_characteristic(WRITE_CHAR_UUID)
-        if char is not None:
-            write_with_response = "write" in char.properties
+    if char is None:
+        await async_disconnect(client, None)
+        if clear_cache is not None:
+            with contextlib.suppress(Exception):
+                await clear_cache(address)
+        raise CannotConnect("the valve's Bluetooth service list was incomplete; cleared the cache")
+    write_with_response = "write" in char.properties
 
     session = SignatureSession(client, token, on_data, write_with_response=write_with_response)
     try:
@@ -112,6 +127,9 @@ class ChandlerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._first_data = asyncio.Event()
         self._disconnected = asyncio.Event()
         self._start_error: Exception | None = None
+        self._session: SignatureSession | None = None
+        self._client: Any = None
+        self._clock_lock = asyncio.Lock()
 
     # -- lifecycle ---------------------------------------------------------------
 
@@ -142,6 +160,53 @@ class ChandlerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await self._task
             self._task = None
 
+    # -- the one write the integration offers ------------------------------------
+
+    def _writable_session(self) -> tuple[SignatureSession, Any]:
+        """Return (session, client) if the valve is connected and idle, else raise."""
+        session, client = self._session, self._client
+        if not self.connected or session is None or client is None:
+            raise HomeAssistantError("The valve is not connected")
+        data = self.data or {}
+        if data.get("dlr") or data.get("drcp"):
+            raise HomeAssistantError("The valve is regenerating; try again when it has finished")
+        return session, client
+
+    async def async_sync_clock(self) -> tuple[int, int]:
+        """Set the valve's clock to Home Assistant's local time. Returns (hour, minute).
+
+        Waits for the start of the next minute, then writes that minute with seconds set
+        to 0, so the valve's seconds begin in step with real time. Only ``dh``, ``dm`` and
+        ``ds`` are written. Refuses while the valve is regenerating.
+        """
+        if self._clock_lock.locked():
+            raise HomeAssistantError("A clock sync is already waiting for the next minute")
+        async with self._clock_lock:
+            self._writable_session()
+            for _ in range(3):
+                now = dt_util.now()
+                await asyncio.sleep(seconds_to_next_minute(now.second, now.microsecond) + 0.05)
+                now = dt_util.now()
+                if now.second < 5:
+                    break  # we are just past the boundary
+            else:
+                raise HomeAssistantError("Could not line the write up with the minute change")
+            session, client = self._writable_session()  # re-check after waiting
+            max_packet = max(8, int(getattr(client, "mtu_size", 23)) - 3)
+            data = self.data or {}
+            _LOGGER.info(
+                "%s: setting the valve clock to %02d:%02d:00 (it reported %s:%s)",
+                self.address,
+                now.hour,
+                now.minute,
+                data.get("dh"),
+                data.get("dm"),
+            )
+            await session.send_json(
+                {"dh": now.hour, "dm": now.minute, "ds": 0}, max_packet=max_packet
+            )
+            return now.hour, now.minute
+
     # -- connection loop ---------------------------------------------------------
 
     def _on_data(self, state: dict[str, Any]) -> None:
@@ -164,6 +229,7 @@ class ChandlerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     on_data=self._on_data,
                     disconnected_callback=self._on_disconnect,
                 )
+                self._session, self._client = session, client
                 self.connected = True
                 self._start_error = None
                 backoff = RETRY_MIN
@@ -183,6 +249,7 @@ class ChandlerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.debug("%s: connection problem: %s", self.address, err)
             finally:
                 was_connected, self.connected = self.connected, False
+                self._session = self._client = None
                 if client is not None:
                     await asyncio.shield(async_disconnect(client, session))
                 if was_connected and not self._stopping:

@@ -74,14 +74,21 @@ def packet_crc_ok(packet: bytes) -> bool:
     return crc16(packet[:-2]) == expected
 
 
-def encode_packet(header: int, payload: bytes) -> bytes:
-    """Build one data packet: header, payload, CRC (low byte first)."""
+def encode_packet(header: int, payload: bytes, *, to_valve: bool = False) -> bytes:
+    """Build one data packet: header, payload, CRC.
+
+    The CRC byte order differs by direction, found by testing against a real valve (the
+    published guide only shows the receive side): packets the valve sends carry the CRC low
+    byte first, but the valve only accepts packets sent to it with the CRC **high byte
+    first** (it answers anything else with a NAK).
+    """
     body = bytes([header]) + payload
     crc = crc16(body)
-    return body + bytes([crc & 0xFF, crc >> 8])
+    tail = bytes([crc >> 8, crc & 0xFF]) if to_valve else bytes([crc & 0xFF, crc >> 8])
+    return body + tail
 
 
-def encode_json_packets(obj: Any, mtu: int = MAX_PACKET) -> list[bytes]:
+def encode_json_packets(obj: Any, mtu: int = MAX_PACKET, *, to_valve: bool = False) -> list[bytes]:
     """Encode a JSON object into one or more packets no larger than the MTU."""
     data = json.dumps(obj, separators=(",", ":")).encode()
     chunk = mtu - HEADER_SIZE - CRC_SIZE
@@ -93,7 +100,7 @@ def encode_json_packets(obj: Any, mtu: int = MAX_PACKET) -> list[bytes]:
             header |= FIRST
         if index == len(parts) - 1:
             header |= LAST
-        packets.append(encode_packet(header, part))
+        packets.append(encode_packet(header, part, to_valve=to_valve))
     return packets
 
 

@@ -7,7 +7,7 @@ DOMAIN = "chandler_signature"
 
 CONF_TOKEN = "token"
 
-PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR]
+PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON]
 
 AUTH_TIMEOUT = 20  # seconds to connect and authenticate
 STARTUP_TIMEOUT = 45  # seconds setup waits for the first data

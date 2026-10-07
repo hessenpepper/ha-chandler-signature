@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,7 +23,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.restore_state import RestoredExtraData, RestoreEntity
 
 from . import ChandlerConfigEntry
 from .coordinator import ChandlerCoordinator
@@ -34,6 +33,7 @@ from .models import (
     battery_volts,
     is_metered_softener,
     is_softener,
+    restore_water_total,
     salt_percent,
     scaled,
 )
@@ -136,6 +136,7 @@ async def async_setup_entry(
         if description.applies(state)
     ]
     entities.append(ChandlerWaterTotalSensor(coordinator))
+    entities.append(ChandlerClockSensor(coordinator))
     async_add_entities(entities)
 
 
@@ -161,12 +162,19 @@ class ChandlerWaterTotalSensor(ChandlerEntity, RestoreEntity, SensorEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        if (previous := await self.async_get_last_state()) is not None:
-            with suppress(ValueError, TypeError):
-                self._total = float(previous.state)
-            with suppress(ValueError, TypeError):
-                self._last = float(previous.attributes["last_daily_reading"])
+        extra = await self.async_get_last_extra_data()
+        previous = await self.async_get_last_state()
+        self._total, self._last = restore_water_total(
+            extra.as_dict() if extra is not None else None,
+            previous.state if previous is not None else None,
+            dict(previous.attributes) if previous is not None else None,
+        )
         self._fold_in(self.coordinator.data)
+
+    @property
+    def extra_restore_state_data(self) -> RestoredExtraData:
+        """Saved separately from the entity state so it survives the entity being unavailable."""
+        return RestoredExtraData({"total": self._total, "last": self._last})
 
     def _fold_in(self, data: dict[str, Any] | None) -> None:
         reading = scaled(data or {}, "dwu", 100)
@@ -187,6 +195,25 @@ class ChandlerWaterTotalSensor(ChandlerEntity, RestoreEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, float | None]:
         return {"last_daily_reading": self._last}
+
+
+class ChandlerClockSensor(ChandlerEntity, SensorEntity):
+    """The valve's own clock (HH:MM), to spot drift. Updates when the valve reports it."""
+
+    _attr_name = "Valve clock"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:clock-outline"
+
+    def __init__(self, coordinator: ChandlerCoordinator) -> None:
+        super().__init__(coordinator, "valve_clock")
+
+    @property
+    def native_value(self) -> str | None:
+        data = self.coordinator.data or {}
+        hour, minute = data.get("dh"), data.get("dm")
+        if not isinstance(hour, int) or not isinstance(minute, int):
+            return None
+        return f"{hour:02d}:{minute:02d}"
 
 
 class ChandlerSensor(ChandlerEntity, SensorEntity):

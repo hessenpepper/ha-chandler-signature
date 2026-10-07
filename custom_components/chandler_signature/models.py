@@ -90,6 +90,38 @@ def battery_volts(state: dict[str, Any]) -> float | None:
     return value if value else None
 
 
+def restore_water_total(
+    extra: dict[str, Any] | None,
+    state: str | None,
+    attributes: dict[str, Any] | None,
+) -> tuple[float, float | None]:
+    """Work out (running total, last daily reading) after a restart, tolerating junk.
+
+    Prefers the stored extra data. Falls back to the last entity state and its attribute.
+    Anything missing, ``unknown`` or ``unavailable`` means "start fresh" instead of raising.
+    """
+
+    def number(value: Any) -> float | None:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    if extra:
+        total = number(extra.get("total"))
+        if total is not None:
+            return total, number(extra.get("last"))
+    total = number(state)
+    if total is None:
+        return 0.0, None
+    return total, number((attributes or {}).get("last_daily_reading"))
+
+
+def seconds_to_next_minute(second: int, microsecond: int = 0) -> float:
+    """Seconds from ``hh:mm:second.microsecond`` until the next minute begins."""
+    return 60.0 - second - microsecond / 1_000_000
+
+
 def accumulate_daily(total: float, last: float | None, new: float) -> float:
     """Fold a counter that resets to zero every day into a running total.
 

@@ -111,6 +111,31 @@ SOFTENER = json.loads(
 )
 
 
+def test_restore_water_total_is_defensive():
+    from chandler_signature.models import restore_water_total
+
+    # Preferred: the dedicated extra data
+    assert restore_water_total({"total": 12.5, "last": 40.0}, "unavailable", {}) == (12.5, 40.0)
+    # Fallback: previous state and its attribute
+    assert restore_water_total(None, "3.0", {"last_daily_reading": 1137.0}) == (3.0, 1137.0)
+    # The bug that hit the iron filter: last state unavailable with no attributes
+    assert restore_water_total(None, "unavailable", {}) == (0.0, None)
+    assert restore_water_total(None, "unknown", None) == (0.0, None)
+    assert restore_water_total(None, None, None) == (0.0, None)
+    # A good total with the attribute missing keeps the total and just re-baselines
+    assert restore_water_total(None, "7.25", {}) == (7.25, None)
+    # Garbage extra data falls through to the state
+    assert restore_water_total({"total": "x"}, "2.0", {}) == (2.0, None)
+
+
+def test_seconds_to_next_minute():
+    from chandler_signature.models import seconds_to_next_minute
+
+    assert seconds_to_next_minute(0) == 60.0
+    assert seconds_to_next_minute(59, 500_000) == 0.5
+    assert seconds_to_next_minute(30) == 30.0
+
+
 def test_accumulate_daily_counter():
     from chandler_signature.models import accumulate_daily
 

@@ -20,10 +20,12 @@ from typing import Any, Protocol
 from .protocol import (
     ACK,
     ID_PACKET,
+    MAX_PACKET,
     READ_CHAR_UUID,
     RESET_COMMAND,
     WRITE_CHAR_UUID,
     PacketReader,
+    encode_json_packets,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -73,6 +75,8 @@ class SignatureSession:
         self._authenticated = asyncio.Event()
         self._failed: Exception | None = None
         self._failure_event = asyncio.Event()
+        self._ack = asyncio.Event()  # set whenever the valve sends an ACK or NAK
+        self._last_reply_nak = False
         self.state: dict[str, Any] = {}
         self.last_rx = time.monotonic()
 
@@ -106,19 +110,48 @@ class SignatureSession:
             raise self._failed
         raise TimeoutError("valve did not authenticate in time")
 
+    async def send_json(
+        self, obj: dict[str, Any], *, max_packet: int = 20, ack_timeout: float = 3.0
+    ) -> None:
+        """Write a JSON message (for the few settings the valve lets a client change).
+
+        ``max_packet`` is the largest single BLE write to use (ATT MTU minus 3). Larger
+        messages are split into a FIRST ... LAST packet sequence, and each packet is
+        acknowledged by the valve before the next one is sent. Raises SessionClosed if the
+        valve does not acknowledge a packet. An ACK means the valve received the message,
+        not that it accepted the change.
+        """
+        if not self._authenticated.is_set():
+            raise SessionClosed("not authenticated")
+        packets = encode_json_packets(obj, mtu=max(8, min(max_packet, MAX_PACKET)), to_valve=True)
+        for packet in packets:
+            self._ack.clear()
+            self._queue.put_nowait(packet)
+            try:
+                await asyncio.wait_for(self._ack.wait(), ack_timeout)
+            except TimeoutError as err:
+                raise SessionClosed("the valve did not acknowledge the write") from err
+            if self._last_reply_nak:
+                raise SessionClosed("the valve rejected the write (NAK)")
+            if self._failed is not None:
+                raise self._failed
+
     async def close(self) -> None:
         """Ask the valve to disconnect gracefully and stop the writer."""
-        with contextlib.suppress(Exception):
-            await self._client.write_gatt_char(
-                WRITE_CHAR_UUID, RESET_COMMAND, response=self._write_with_response
-            )
-        with contextlib.suppress(Exception):
-            await self._client.stop_notify(READ_CHAR_UUID)
-        if self._writer is not None:
-            self._queue.put_nowait(None)
-            self._writer.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await self._writer
+        try:
+            with contextlib.suppress(Exception):
+                await self._client.write_gatt_char(
+                    WRITE_CHAR_UUID, RESET_COMMAND, response=self._write_with_response
+                )
+            with contextlib.suppress(Exception):
+                await self._client.stop_notify(READ_CHAR_UUID)
+        finally:
+            # Always stop the writer, even if the link is dead or this call is cancelled.
+            if self._writer is not None:
+                self._queue.put_nowait(None)
+                self._writer.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await asyncio.shield(self._writer)
 
     # -- internals ---------------------------------------------------------------
 
@@ -140,6 +173,9 @@ class SignatureSession:
         self._queue.put_nowait(self._token)
 
     def _handle(self, kind: str, data: Any) -> None:
+        if kind in ("ack", "nak"):
+            self._last_reply_nak = kind == "nak"
+            self._ack.set()
         if kind == "ack" and self._stage == "id_sent":
             # The valve acknowledged the ID packet: acknowledge back, then send the token.
             self._queue.put_nowait(bytes([ACK]))

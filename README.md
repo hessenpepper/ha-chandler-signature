@@ -6,8 +6,9 @@ that Chandler documents for third-party use, authenticated with the per-valve AP
 that the Legacy View app generates.
 
 > **Unofficial.** This project is not affiliated with or endorsed by Chandler Systems, Inc.
-> "Chandler" and "Legacy View" belong to their owners. The integration is **read-only**: it
-> never changes a setting on your valve.
+> "Chandler" and "Legacy View" belong to their owners. The integration only reads from your
+> valve, with one exception: the **Sync clock** button, which sets the valve's clock and does
+> nothing until you press it.
 
 ## What you get
 
@@ -21,6 +22,7 @@ For each valve, a device with:
 | Salt remaining (lb), salt level (%), water hardness setting | softeners |
 | Battery voltage (diagnostic) | valves that report a battery |
 | Regeneration motor moving | all |
+| Valve clock (diagnostic), Sync clock (button) | all |
 
 The device page also shows the valve type, serial number and firmware (for example `C6.18`).
 Values are pushed by the valve, so they update as soon as they change. If the connection
@@ -49,6 +51,15 @@ restart Home Assistant.
    choose *Add integration* and search for **Chandler Signature**.
 2. Enter the valve's API token. Setup connects to the valve to verify it.
 3. Repeat for each valve; every valve has its own token.
+
+## Sync clock
+
+A valve's clock decides when it regenerates (for example "2:00 AM"), so a wrong clock moves
+that. **Valve clock** shows the valve's time so you can spot drift; **Sync clock** sets the
+valve to Home Assistant's local time. It waits for the start of the next minute (so a press can
+take up to a minute) and then writes that hour and minute with seconds set to 0, so the valve's
+seconds start in step with real time. It refuses while the valve is regenerating. It is the
+only write the integration performs.
 
 ## Energy dashboard (water)
 
