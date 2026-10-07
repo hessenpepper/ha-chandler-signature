@@ -77,8 +77,9 @@ template:
 ```
 
 Use the upstream valve as the Energy dashboard's water source and the others as individual
-water devices. Set both valves' clocks correctly in the Legacy View app: each valve resets its
-daily counter at its own midnight, and the totals only line up well when the clocks agree.
+water devices. A valve with a wrong clock only changes *when* its "today" counter resets; the
+lifetime totals still add up real usage. The one gap: water used while Home Assistant is
+disconnected across a valve's midnight reset is counted from the reset onward.
 
 ## Good to know
 
