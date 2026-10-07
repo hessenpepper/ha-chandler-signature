@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,13 +22,15 @@ from homeassistant.const import (
     UnitOfVolume,
     UnitOfVolumeFlowRate,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from . import ChandlerConfigEntry
 from .coordinator import ChandlerCoordinator
 from .entity import ChandlerEntity
 from .models import (
+    accumulate_daily,
     battery_volts,
     is_metered_softener,
     is_softener,
@@ -127,11 +130,63 @@ async def async_setup_entry(
     """Create the sensors that make sense for this valve type."""
     coordinator = entry.runtime_data
     state = coordinator.data or {}
-    async_add_entities(
+    entities: list[SensorEntity] = [
         ChandlerSensor(coordinator, description)
         for description in SENSORS
         if description.applies(state)
-    )
+    ]
+    entities.append(ChandlerWaterTotalSensor(coordinator))
+    async_add_entities(entities)
+
+
+class ChandlerWaterTotalSensor(ChandlerEntity, RestoreEntity, SensorEntity):
+    """Lifetime water total built from the valve's daily counter.
+
+    The valve only reports "water used today", which resets at its midnight. This sensor
+    adds up the changes so it keeps growing, which is what the Energy dashboard needs.
+    It starts at zero when first created, and usage while Home Assistant is disconnected
+    across a daily reset is only counted from the reset onward.
+    """
+
+    _attr_name = "Water used total"
+    _attr_device_class = SensorDeviceClass.WATER
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = UnitOfVolume.GALLONS
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, coordinator: ChandlerCoordinator) -> None:
+        super().__init__(coordinator, "water_used_total")
+        self._total = 0.0
+        self._last: float | None = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if (previous := await self.async_get_last_state()) is not None:
+            with suppress(ValueError, TypeError):
+                self._total = float(previous.state)
+            with suppress(ValueError, TypeError):
+                self._last = float(previous.attributes["last_daily_reading"])
+        self._fold_in(self.coordinator.data)
+
+    def _fold_in(self, data: dict[str, Any] | None) -> None:
+        reading = scaled(data or {}, "dwu", 100)
+        if reading is None:
+            return
+        self._total = accumulate_daily(self._total, self._last, reading)
+        self._last = reading
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self._fold_in(self.coordinator.data)
+        super()._handle_coordinator_update()
+
+    @property
+    def native_value(self) -> float:
+        return round(self._total, 2)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, float | None]:
+        return {"last_daily_reading": self._last}
 
 
 class ChandlerSensor(ChandlerEntity, SensorEntity):

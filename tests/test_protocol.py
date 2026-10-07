@@ -111,6 +111,16 @@ SOFTENER = json.loads(
 )
 
 
+def test_accumulate_daily_counter():
+    from chandler_signature.models import accumulate_daily
+
+    assert accumulate_daily(0.0, None, 19.0) == 0.0  # first reading is only a baseline
+    assert accumulate_daily(0.0, 19.0, 25.5) == 6.5  # normal increase
+    assert accumulate_daily(6.5, 25.5, 25.5) == 6.5  # no change
+    assert accumulate_daily(6.5, 25.5, 3.0) == 9.5  # daily reset: new value is all new usage
+    assert accumulate_daily(9.5, 3.0, 0.0) == 9.5  # reset to zero adds nothing
+
+
 def test_models():
     assert firmware_version(SOFTENER) == "C6.18"
     assert firmware_version({}) is None

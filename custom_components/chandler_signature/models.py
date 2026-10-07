@@ -90,6 +90,19 @@ def battery_volts(state: dict[str, Any]) -> float | None:
     return value if value else None
 
 
+def accumulate_daily(total: float, last: float | None, new: float) -> float:
+    """Fold a counter that resets to zero every day into a running total.
+
+    ``last`` is the previous reading (None for the first one, which only sets the
+    baseline). A reading below the previous one means the counter reset, so the new
+    reading is all usage since the reset.
+    """
+    if last is None:
+        return total
+    delta = new - last if new >= last else new
+    return round(total + delta, 3)
+
+
 def salt_percent(state: dict[str, Any]) -> float | None:
     """Salt remaining as a percentage of the brine tank capacity."""
     remaining = scaled(state, "dbtr", 10)

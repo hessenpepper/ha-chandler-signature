@@ -16,6 +16,7 @@ For each valve, a device with:
 | Entity | Valves |
 |---|---|
 | Water used today, average daily water use, peak flow today | all |
+| Water used total (keeps counting across the daily reset) | all |
 | Treated water remaining | metered softeners |
 | Salt remaining (lb), salt level (%), water hardness setting | softeners |
 | Battery voltage (diagnostic) | valves that report a battery |
@@ -48,6 +49,36 @@ restart Home Assistant.
    choose *Add integration* and search for **Chandler Signature**.
 2. Enter the valve's API token. Setup connects to the valve to verify it.
 3. Repeat for each valve; every valve has its own token.
+
+## Energy dashboard (water)
+
+The valve only reports "water used today", which resets at the valve's midnight. **Water used
+total** adds those daily counts up into a lifetime total (it starts at zero when the entity is
+first created), which is what the Energy dashboard's water settings need.
+
+If one valve sees all of a building's water and another only part of it (for example a filter
+upstream of a softener, with outside hose bibs on the filter only), the difference of the two
+totals is the water that bypassed the second valve. A template sensor works well for that:
+
+```yaml
+template:
+  - sensor:
+      - name: Outside water used
+        unique_id: outside_water_used
+        unit_of_measurement: gal
+        device_class: water
+        state_class: total   # not total_increasing: small dips between updates are normal
+        state: >
+          {{ (states('sensor.filter_water_used_total') | float
+              - states('sensor.softener_water_used_total') | float) | round(2) }}
+        availability: >
+          {{ states('sensor.filter_water_used_total') | is_number
+             and states('sensor.softener_water_used_total') | is_number }}
+```
+
+Use the upstream valve as the Energy dashboard's water source and the others as individual
+water devices. Set both valves' clocks correctly in the Legacy View app: each valve resets its
+daily counter at its own midnight, and the totals only line up well when the clocks agree.
 
 ## Good to know
 
