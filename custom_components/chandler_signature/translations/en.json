@@ -1,0 +1,33 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Choose a valve",
+        "description": "Select the Chandler valve to add.",
+        "data": {"address": "Valve"}
+      },
+      "token": {
+        "title": "API token for {name}",
+        "description": "In the Chandler Legacy View app, open this valve's settings and enable the API. The app then shows an API token (a UUID). Enter it here. Disabling and re-enabling the API creates a new token.",
+        "data": {"token": "API token"}
+      },
+      "reauth_confirm": {
+        "title": "New API token for {name}",
+        "description": "The valve no longer accepts the saved token. Enter the current API token from the Legacy View app.",
+        "data": {"token": "API token"}
+      }
+    },
+    "error": {
+      "invalid_token": "That is not a valid token. It should be a UUID such as 8dffdfbd-40cc-4b86-8df8-1d48463b20f1.",
+      "invalid_auth": "The valve rejected this token. Check that the API is enabled and copy the current token.",
+      "cannot_connect": "Could not connect to the valve. Make sure it is in Bluetooth range and that no other app is connected to it.",
+      "unknown": "Unexpected error. See the Home Assistant log for details."
+    },
+    "abort": {
+      "already_configured": "This valve is already configured.",
+      "no_devices_found": "No new Chandler valves were found nearby.",
+      "reauth_successful": "The new token was saved."
+    }
+  }
+}

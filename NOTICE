@@ -1,0 +1,12 @@
+Chandler Signature for Home Assistant
+Copyright 2026 Steve Hess
+
+Licensed under the Apache License, Version 2.0.
+
+The CRC-16 routine in custom_components/chandler_signature/protocol.py follows the
+CRC-16-CCITT implementation in the Zephyr project (originally by Intel Corporation):
+Copyright (c) 2017 Intel Corporation, SPDX-License-Identifier: Apache-2.0.
+
+This project is an independent implementation of the Bluetooth API that Chandler Systems,
+Inc. documents for third-party developers. It contains none of that documentation's text
+or code, and it is not affiliated with or endorsed by Chandler Systems, Inc.
