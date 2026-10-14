@@ -13,15 +13,33 @@ from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
     async_discovered_service_info,
 )
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
+from homeassistant.core import callback
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
 from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
 )
 
-from .const import CONF_TOKEN, DOMAIN
+from .const import (
+    CONF_AUTO_SYNC,
+    CONF_DRIFT_MINUTES,
+    CONF_TOKEN,
+    DEFAULT_AUTO_SYNC,
+    DEFAULT_DRIFT_MINUTES,
+    DOMAIN,
+    MAX_DRIFT_MINUTES,
+    MIN_DRIFT_MINUTES,
+)
 from .coordinator import CannotConnect, async_connect, async_disconnect
 from .models import valve_type_name
 from .protocol import MANUFACTURER_ID, parse_token
@@ -44,6 +62,11 @@ class ChandlerSignatureConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle setup of a Chandler valve."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        return ChandlerOptionsFlow()
 
     def __init__(self) -> None:
         self._address: str | None = None
@@ -148,3 +171,37 @@ class ChandlerSignatureConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders={"name": self._name},
         )
+
+
+class ChandlerOptionsFlow(OptionsFlow):
+    """Automatic valve clock correction."""
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(
+                data={
+                    CONF_AUTO_SYNC: user_input[CONF_AUTO_SYNC],
+                    CONF_DRIFT_MINUTES: int(user_input[CONF_DRIFT_MINUTES]),
+                }
+            )
+        options = self.config_entry.options
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_AUTO_SYNC, default=options.get(CONF_AUTO_SYNC, DEFAULT_AUTO_SYNC)
+                ): bool,
+                vol.Required(
+                    CONF_DRIFT_MINUTES,
+                    default=options.get(CONF_DRIFT_MINUTES, DEFAULT_DRIFT_MINUTES),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_DRIFT_MINUTES,
+                        max=MAX_DRIFT_MINUTES,
+                        step=1,
+                        unit_of_measurement="min",
+                        mode=NumberSelectorMode.BOX,
+                    )
+                ),
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema)

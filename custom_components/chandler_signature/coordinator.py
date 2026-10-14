@@ -29,13 +29,18 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     AUTH_TIMEOUT,
+    AUTO_SYNC_COOLDOWN,
+    CONF_AUTO_SYNC,
+    CONF_DRIFT_MINUTES,
     CONF_TOKEN,
+    DEFAULT_AUTO_SYNC,
+    DEFAULT_DRIFT_MINUTES,
     RETRY_MAX,
     RETRY_MIN,
     SILENCE_TIMEOUT,
     STARTUP_TIMEOUT,
 )
-from .models import seconds_to_next_minute
+from .models import clock_drift_minutes, seconds_to_next_minute, should_auto_sync
 from .protocol import WRITE_CHAR_UUID, parse_token
 from .session import InvalidAuth, SessionClosed, SignatureError, SignatureSession
 
@@ -130,6 +135,8 @@ class ChandlerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._session: SignatureSession | None = None
         self._client: Any = None
         self._clock_lock = asyncio.Lock()
+        self._auto_sync_task: asyncio.Task[None] | None = None
+        self._last_auto_sync: float | None = None  # time.monotonic() of the last attempt
 
     # -- lifecycle ---------------------------------------------------------------
 
@@ -154,6 +161,9 @@ class ChandlerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_stop(self) -> None:
         self._stopping = True
         self._disconnected.set()
+        if self._auto_sync_task is not None:
+            self._auto_sync_task.cancel()
+            self._auto_sync_task = None
         if self._task is not None:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -207,11 +217,63 @@ class ChandlerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             return now.hour, now.minute
 
+    # -- automatic clock correction ----------------------------------------------
+
+    def _maybe_auto_sync(self) -> None:
+        """Start a clock sync if the valve has drifted past the configured threshold.
+
+        Runs on every data push (the valve reports its time about once a minute). Never
+        while regenerating, at most once per AUTO_SYNC_COOLDOWN, and only one at a time,
+        so a valve that ignores the write cannot cause a loop.
+        """
+        options = self.config_entry.options
+        if not options.get(CONF_AUTO_SYNC, DEFAULT_AUTO_SYNC):
+            return
+        if self._stopping or not self.connected or self._clock_lock.locked():
+            return
+        if self._auto_sync_task is not None and not self._auto_sync_task.done():
+            return
+        data = self.data or {}
+        if data.get("dlr") or data.get("drcp"):
+            return
+        now = dt_util.now()
+        drift = clock_drift_minutes(data.get("dh"), data.get("dm"), now.hour, now.minute)
+        since = (
+            None if self._last_auto_sync is None else time.monotonic() - self._last_auto_sync
+        )
+        threshold = int(options.get(CONF_DRIFT_MINUTES, DEFAULT_DRIFT_MINUTES))
+        if not should_auto_sync(drift, threshold, since, AUTO_SYNC_COOLDOWN):
+            return
+        self._last_auto_sync = time.monotonic()
+        _LOGGER.info(
+            "%s: valve clock is %+d min off (valve %s:%s, real %02d:%02d); syncing",
+            self.address,
+            drift,
+            data.get("dh"),
+            data.get("dm"),
+            now.hour,
+            now.minute,
+        )
+        self._auto_sync_task = self.hass.async_create_background_task(
+            self._auto_sync(), f"chandler_signature auto-sync {self.address}"
+        )
+
+    async def _auto_sync(self) -> None:
+        try:
+            hour, minute = await self.async_sync_clock()
+        except HomeAssistantError as err:
+            _LOGGER.warning("%s: automatic clock sync did not run: %s", self.address, err)
+        except Exception:  # noqa: BLE001 - never let this kill the connection loop
+            _LOGGER.exception("%s: automatic clock sync failed", self.address)
+        else:
+            _LOGGER.info("%s: valve clock set to %02d:%02d", self.address, hour, minute)
+
     # -- connection loop ---------------------------------------------------------
 
     def _on_data(self, state: dict[str, Any]) -> None:
         self.async_set_updated_data(dict(state))
         self._first_data.set()
+        self._maybe_auto_sync()
 
     def _on_disconnect(self, _client: Any) -> None:
         self._disconnected.set()

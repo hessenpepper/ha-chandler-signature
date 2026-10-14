@@ -7,8 +7,8 @@ that the Legacy View app generates.
 
 > **Unofficial.** This project is not affiliated with or endorsed by Chandler Systems, Inc.
 > "Chandler" and "Legacy View" belong to their owners. The integration only reads from your
-> valve, with one exception: the **Sync clock** button, which sets the valve's clock and does
-> nothing until you press it.
+> valve, with one exception: it can set the valve's clock, either when you press **Sync clock**
+> or automatically when the clock drifts (see below; you can turn that off).
 
 ## What you get
 
@@ -60,6 +60,20 @@ valve to Home Assistant's local time. It waits for the start of the next minute 
 take up to a minute) and then writes that hour and minute with seconds set to 0, so the valve's
 seconds start in step with real time. It refuses while the valve is regenerating. It is the
 only write the integration performs.
+
+### Automatic correction on drift
+
+The valve keeps only a time of day (no date or timezone), so its clock drifts and does not
+follow daylight saving time. Each time the valve reports its time (about once a minute) the
+integration compares it with Home Assistant's local time. If the valve is off by the
+**drift threshold** (default **2 minutes**, measured around the 24 hour clock) it runs the
+same sync as the button. Safeguards: never while the valve is regenerating, at most one
+attempt per valve per hour (so a valve that ignored the write cannot cause a loop), and only
+while connected. Each automatic sync is logged at info level.
+
+Turn it off, or change the threshold, from **Settings > Devices & services > Chandler
+Signature > Configure**. The correction uses Home Assistant's configured time zone, so make
+sure that is right.
 
 ## Energy dashboard (water)
 

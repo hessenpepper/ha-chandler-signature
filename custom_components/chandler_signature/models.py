@@ -122,6 +122,37 @@ def seconds_to_next_minute(second: int, microsecond: int = 0) -> float:
     return 60.0 - second - microsecond / 1_000_000
 
 
+def clock_drift_minutes(
+    valve_hour: Any, valve_minute: Any, now_hour: int, now_minute: int
+) -> int | None:
+    """How many minutes the valve's clock is ahead of real time (negative: behind).
+
+    The valve only holds a time of day, so the difference is taken around the 24 hour
+    clock and returned in the range -720..+720 (a valve 23:59 vs real 00:01 is -2, not
+    +1438). Returns None until the valve has reported its time.
+    """
+    for part in (valve_hour, valve_minute):
+        if not isinstance(part, int) or isinstance(part, bool):
+            return None
+    if not (0 <= valve_hour <= 23 and 0 <= valve_minute <= 59):
+        return None
+    diff = (valve_hour * 60 + valve_minute) - (now_hour * 60 + now_minute)
+    diff = (diff + 720) % 1440 - 720
+    return diff
+
+
+def should_auto_sync(
+    drift: int | None,
+    threshold: int,
+    seconds_since_last_attempt: float | None,
+    cooldown: float,
+) -> bool:
+    """Decide whether the clock is far enough off, and not tried too recently."""
+    if drift is None or abs(drift) < threshold:
+        return False
+    return seconds_since_last_attempt is None or seconds_since_last_attempt >= cooldown
+
+
 def accumulate_daily(total: float, last: float | None, new: float) -> float:
     """Fold a counter that resets to zero every day into a running total.
 

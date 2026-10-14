@@ -29,5 +29,17 @@
       "no_devices_found": "No new Chandler valves were found nearby.",
       "reauth_successful": "The new token was saved."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Valve clock",
+        "description": "The valve only keeps a time of day, so it drifts and does not follow daylight saving time. When automatic sync is on, the integration sets the valve's clock to Home Assistant's local time whenever the valve is off by at least the threshold. It never does this while the valve is regenerating, and tries at most once an hour.",
+        "data": {
+          "auto_sync_clock": "Set the valve's clock automatically when it drifts",
+          "drift_minutes": "Drift threshold (minutes)"
+        }
+      }
+    }
   }
 }
